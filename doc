@@ -1,0 +1,57 @@
+# Database (fresh merged DB — separate dedicated container, not the old per-service DBs)
+DATABASE_URL="postgresql://postgres:root@localhost:5434/swipe_db?schema=public"
+
+# Redis
+REDIS_URL="redis://localhost:6379"
+
+# JWT
+JWT_SECRET="8y6v6r8M6t6WmL6gk0lJkVw2x6n7g2gM8lKj8Wv3v8zVwQ1mRk7cY3vJmT4pL8yN6xQzR9nW2pF7sD5uH1kL0g=="
+JWT_EXPIRES_IN="15m"
+REFRESH_TOKEN_EXPIRES_IN="7d"
+
+# App
+PORT=3010
+NODE_ENV="development"
+
+# CORS — explicit allowlist (comma-separated), replaces the gateway's previously wide-open reflect-all-origins default
+CORS_ORIGIN="http://localhost:3000,http://localhost:3001,http://localhost:5173"
+
+# OTP
+OTP_EXPIRES_IN=300
+OTP_MODE=static
+
+# SMTP
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=hammadk426623@gmail.com
+SMTP_PASS=csdi dbyb wdnk dupg
+FROM_EMAIL=hammadk426623@gmail.com
+
+# Frontend URL for password reset link
+PASSWORD_RESET_URL=http://localhost:3000/auth/reset-password
+
+# NIBSS API
+NIBSS_BASE_URL="https://api.nibss-plc.com.ng"
+NIBSS_API_KEY="your-nibss-api-key"
+NIBSS_CLIENT_ID="your-client-id"
+
+# Monnify API (sandbox — replace with live keys/URL for production)
+MONNIFY_BASE_URL="https://sandbox.monnify.com"
+MONNIFY_API_KEY="MK_TEST_USS4WBPTMB"
+MONNIFY_SECRET_KEY="KRASRPENA82HPLWFG4TQ0KERS54JD897"
+MONNIFY_CONTRACT_CODE="5280933292"
+
+# Smile ID (KYC: BVN/NIN/Face verification) — sandbox, real credentials wired up.
+SMILE_ID_PARTNER_ID="8958"
+SMILE_ID_API_KEY="f24b0776-ed8d-4512-9289-fb884f08c388"
+SMILE_ID_CALLBACK_URL="http://localhost:3010/merchant/kyc/webhook"
+SMILE_ID_SERVER=0
+KYC_VERIFICATION_MODE=static
+
+# Cloudinary (file/image storage) — fill in real values from your Cloudinary
+# dashboard (Settings > Access Keys); uploads throw a clear error until set.
+CLOUDINARY_CLOUD_NAME=dewcw3tzu
+CLOUDINARY_API_KEY=253262126122658
+CLOUDINARY_API_SECRET=CVlbbNHhsch3jZ_VwAa4R76O4H4
+
