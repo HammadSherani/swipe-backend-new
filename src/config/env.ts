@@ -33,7 +33,15 @@ const envSchema = z.object({
   SMTP_SECURE: z.string().default('false'),
   SMTP_USER: z.string(),
   SMTP_PASS: z.string(),
-  FROM_EMAIL: z.string().email(),
+  // Tolerate stray whitespace/quotes and a "Name <addr>" value from the host's
+  // env UI; the email service adds the display name itself.
+  FROM_EMAIL: z.preprocess(
+    (v) =>
+      typeof v === 'string'
+        ? (v.match(/<([^>]+)>/)?.[1] ?? v).trim().replace(/^["']|["']$/g, '').trim()
+        : v,
+    z.string().email(),
+  ),
   PASSWORD_RESET_URL: z.string().url().default('http://localhost:3000/auth/reset-password'),
 
   MONNIFY_BASE_URL: z.string().url().default('https://sandbox.monnify.com'),
@@ -62,4 +70,12 @@ const envSchema = z.object({
   CLOUDINARY_API_SECRET: z.string().default(''),
 });
 
-export const env = envSchema.parse(process.env);
+const parsed = envSchema.safeParse(process.env);
+if (!parsed.success) {
+  console.error('❌ Invalid environment variables:');
+  for (const issue of parsed.error.issues) {
+    console.error(`  - ${issue.path.join('.')}: ${issue.message}`);
+  }
+  process.exit(1);
+}
+export const env = parsed.data;
