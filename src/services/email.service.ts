@@ -1,5 +1,10 @@
 import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 import { env } from '../config/env.js';
+
+// Render's free plan blocks outbound SMTP, so Resend's HTTP API is used when a
+// key is configured; SMTP stays as the fallback for local/other hosts.
+const resend = env.RESEND_API_KEY ? new Resend(env.RESEND_API_KEY) : null;
 
 const transporter = nodemailer.createTransport({
   host: env.SMTP_HOST,
@@ -11,9 +16,26 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+interface MailOptions {
+  to: string;
+  subject: string;
+  html: string;
+}
+
+async function sendMail({ to, subject, html }: MailOptions): Promise<void> {
+  const from = `Swipe <${env.FROM_EMAIL}>`;
+
+  if (resend) {
+    const { error } = await resend.emails.send({ from, to, subject, html });
+    if (error) throw new Error(`Resend: ${error.message}`);
+    return;
+  }
+
+  await transporter.sendMail({ from, to, subject, html });
+}
+
 export async function sendOtpEmail(to: string, otp: string, name?: string): Promise<void> {
-  await transporter.sendMail({
-    from: `"Swipe" <${env.FROM_EMAIL}>`,
+  await sendMail({
     to,
     subject: 'Your OTP Verification Code',
     html: `
@@ -33,8 +55,7 @@ export async function sendOtpEmail(to: string, otp: string, name?: string): Prom
 export async function sendPasswordResetEmail(to: string, otp: string, name?: string, resetLink?: string): Promise<void> {
   const link = resetLink || `${env.PASSWORD_RESET_URL}?email=${encodeURIComponent(to)}&otp=${encodeURIComponent(otp)}`;
 
-  await transporter.sendMail({
-    from: `"Swipe" <${env.FROM_EMAIL}>`,
+  await sendMail({
     to,
     subject: 'Reset Your Swipe Password',
     html: `

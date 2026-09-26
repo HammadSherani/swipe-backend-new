@@ -31,8 +31,9 @@ const envSchema = z.object({
   SMTP_HOST: z.string().default('smtp.gmail.com'),
   SMTP_PORT: z.string().default('587'),
   SMTP_SECURE: z.string().default('false'),
-  SMTP_USER: z.string(),
-  SMTP_PASS: z.string(),
+  SMTP_USER: z.string().default(''),
+  SMTP_PASS: z.string().default(''),
+  RESEND_API_KEY: z.string().default(''),
   // Tolerate stray whitespace/quotes and a "Name <addr>" value from the host's
   // env UI; the email service adds the display name itself.
   FROM_EMAIL: z.preprocess(

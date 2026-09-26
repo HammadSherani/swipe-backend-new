@@ -27,7 +27,6 @@ export class AuthService {
       throw new TooManyRequestsError('Too many OTP requests. Please try again later.');
     }
 
-    console.log("data", data);
     
 
     // Check if user already exists
@@ -110,7 +109,6 @@ export class AuthService {
   async verifyOtpsAndRegister(data: VerifyOtpInput) {
     const STATIC_OTP = "123456";
 
-    console.log("data", data);
     
 
     const pending = await prisma.pendingRegistration.findFirst({
@@ -209,7 +207,6 @@ export class AuthService {
       }
     }
 
-    console.log("data", data);
     
 
     const pending = await prisma.pendingRegistration.findFirst({
