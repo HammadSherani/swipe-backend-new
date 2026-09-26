@@ -14,6 +14,7 @@ FROM node:20-alpine AS production
 WORKDIR /app
 RUN apk add --no-cache openssl
 ENV NODE_ENV=production
+ENV PORT=3010
 
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
@@ -22,4 +23,5 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
 
 EXPOSE 3010
-CMD ["npm", "start"]
+# Run migrations, then exec node so it becomes PID 1 and receives SIGTERM directly
+CMD ["sh", "-c", "npx prisma migrate deploy && exec node dist/server.js"]
