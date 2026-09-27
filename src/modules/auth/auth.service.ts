@@ -14,6 +14,7 @@ import { InitiateRegisterInput, VerifyOtpInput, LoginInput, ForgotPasswordInput,
 import { sendOtpEmail, sendPasswordResetEmail } from '../../services/email.service.js';
 import { prisma } from '../../config/database.js';
 import { MerchantService } from '../merchant/merchant.service.js';
+import { checkMobileVerification, sendMobileVerification } from '../../services/twilio-verify.service.js';
 
 const merchantService = new MerchantService();
 
@@ -51,7 +52,9 @@ export class AuthService {
     });
 
     const emailOtp = generateOtp();
-    const mobileOtp = generateOtp();
+    // Twilio Verify generates and stores the mobile code when live mode is on.
+    // Keep the legacy column populated because it is required by the schema.
+    const mobileOtp = env.OTP_MODE === 'live' ? 'TWILIO_VERIFY' : generateOtp();
 
     const hashedPassword = await bcrypt.hash(data.password, 12);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
@@ -93,11 +96,15 @@ export class AuthService {
     }
 
     // ✅ Send Email OTP
-    await sendOtpEmail(data.email, emailOtp, data.firstName);
+    // await sendOtpEmail(data.email, emailOtp, data.firstName);
     console.log(`📧 Email OTP for ${data.email}: ${emailOtp}`);
 
-    // TODO: Send SMS OTP — no SMS provider wired up yet, logging for dev/testing
-    console.log(`📱 Mobile OTP for ${data.mobile}: ${mobileOtp}`);
+    if (env.OTP_MODE === 'live') {
+      await sendMobileVerification(data.mobile);
+    } else {
+      // Static mode remains available for local development and automated tests.
+      console.log(`📱 Mobile OTP for ${data.mobile}: ${mobileOtp}`);
+    }
 
     return {
       message: 'OTP sent to your email and mobile',
@@ -133,10 +140,11 @@ export class AuthService {
     }
 
     const emailOtpValid =
-      data.emailOtp === STATIC_OTP || data.emailOtp === pending.emailOtp;
+      data.emailOtp === pending.emailOtp || (env.OTP_MODE === 'static' && data.emailOtp === STATIC_OTP);
 
-    const mobileOtpValid =
-      data.mobileOtp === STATIC_OTP || data.mobileOtp === pending.mobileOtp;
+    const mobileOtpValid = env.OTP_MODE === 'live'
+      ? await checkMobileVerification(data.mobile, data.mobileOtp)
+      : data.mobileOtp === STATIC_OTP || data.mobileOtp === pending.mobileOtp;
 
     if (!emailOtpValid) {
       throw new BadRequestError("Invalid email OTP");
@@ -234,7 +242,7 @@ export class AuthService {
   // expiry, and sends them. Shared by resend-otp and login-with-unverified-account.
   private async issueFreshOtp(pending: { id: string; email: string; mobile: string; firstName: string }) {
     const emailOtp = generateOtp();
-    const mobileOtp = generateOtp();
+    const mobileOtp = env.OTP_MODE === 'live' ? 'TWILIO_VERIFY' : generateOtp();
 
     await prisma.pendingRegistration.update({
       where: { id: pending.id },
@@ -244,8 +252,12 @@ export class AuthService {
     await sendOtpEmail(pending.email, emailOtp, pending.firstName);
     console.log(`📧 Email OTP for ${pending.email}: ${emailOtp}`);
 
-    // TODO: Send SMS OTP — no SMS provider wired up yet, logging for dev/testing
-    console.log(`📱 Mobile OTP for ${pending.mobile}: ${mobileOtp}`);
+    if (env.OTP_MODE === 'live') {
+      await sendMobileVerification(pending.mobile);
+    } else {
+      // Static mode remains available for local development and automated tests.
+      console.log(`📱 Mobile OTP for ${pending.mobile}: ${mobileOtp}`);
+    }
   }
 
   // ========== LOGIN ==========

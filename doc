@@ -18,7 +18,12 @@ CORS_ORIGIN="http://localhost:3000,http://localhost:3001,http://localhost:5173"
 
 # OTP
 OTP_EXPIRES_IN=300
-OTP_MODE=static
+OTP_MODE=live
+
+# Twilio Verify (mobile OTP). Create these values in the Twilio Console.
+TWILIO_ACCOUNT_SID="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+TWILIO_AUTH_TOKEN="your-twilio-auth-token"
+TWILIO_VERIFY_SERVICE_SID="VAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 # SMTP
 SMTP_HOST=smtp.gmail.com

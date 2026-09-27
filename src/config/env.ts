@@ -28,12 +28,12 @@ const envSchema = z.object({
   OTP_EXPIRES_IN: z.string().default('300').transform(Number),
   OTP_MODE: z.enum(['static', 'live']).default('static'),
 
-  SMTP_HOST: z.string().default('smtp.gmail.com'),
-  SMTP_PORT: z.string().default('587'),
-  SMTP_SECURE: z.string().default('false'),
-  SMTP_USER: z.string().default(''),
-  SMTP_PASS: z.string().default(''),
-  RESEND_API_KEY: z.string().default(''),
+  // Twilio Verify — used for the mobile OTP when OTP_MODE=live.
+  TWILIO_ACCOUNT_SID: z.string().default(''),
+  TWILIO_AUTH_TOKEN: z.string().default(''),
+  TWILIO_VERIFY_SERVICE_SID: z.string().default(''),
+
+  RESEND_API_KEY: z.string().min(1, 'RESEND_API_KEY is required'),
   // Tolerate stray whitespace/quotes and a "Name <addr>" value from the host's
   // env UI; the email service adds the display name itself.
   FROM_EMAIL: z.preprocess(

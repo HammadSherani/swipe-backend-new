@@ -1,20 +1,8 @@
-import nodemailer from 'nodemailer';
 import { Resend } from 'resend';
 import { env } from '../config/env.js';
 
-// Render's free plan blocks outbound SMTP, so Resend's HTTP API is used when a
-// key is configured; SMTP stays as the fallback for local/other hosts.
-const resend = env.RESEND_API_KEY ? new Resend(env.RESEND_API_KEY) : null;
-
-const transporter = nodemailer.createTransport({
-  host: env.SMTP_HOST,
-  port: Number(env.SMTP_PORT),
-  secure: env.SMTP_SECURE === 'true',
-  auth: {
-    user: env.SMTP_USER,
-    pass: env.SMTP_PASS,
-  },
-});
+// Resend's HTTP API is used because Render's free plan blocks outbound SMTP.
+const resend = new Resend(env.RESEND_API_KEY);
 
 interface MailOptions {
   to: string;
@@ -25,13 +13,8 @@ interface MailOptions {
 async function sendMail({ to, subject, html }: MailOptions): Promise<void> {
   const from = `Swipe <${env.FROM_EMAIL}>`;
 
-  if (resend) {
-    const { error } = await resend.emails.send({ from, to, subject, html });
-    if (error) throw new Error(`Resend: ${error.message}`);
-    return;
-  }
-
-  await transporter.sendMail({ from, to, subject, html });
+  const { error } = await resend.emails.send({ from, to, subject, html });
+  if (error) throw new Error(`Resend: ${error.message}`);
 }
 
 export async function sendOtpEmail(to: string, otp: string, name?: string): Promise<void> {

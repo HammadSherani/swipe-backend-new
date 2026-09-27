@@ -16,7 +16,7 @@ import {
   KycBankInput,
   KycDecisionInput,
 } from './merchant.schema.js';
-import { smileIdService, SmileIdMatchStatus, SmileIdBusinessType } from '../../services/smile-id.service.js';
+import { smileIdService, SmileIdApiError, SmileIdMatchStatus, SmileIdBusinessType } from '../../services/smile-id.service.js';
 import { monnifyService } from '../../services/monnify.service.js';
 import { namesLooselyMatch } from '../../utils/name-match.js';
 import { isRestrictedMcc, requiresScuml } from '../../config/restricted-mcc.js';
@@ -30,6 +30,21 @@ function toCheckStatus(matchStatus: SmileIdMatchStatus): CheckStatus {
   if (matchStatus === 'VERIFIED') return 'VERIFIED';
   if (matchStatus === 'MANUAL_REVIEW') return 'MANUAL_REVIEW';
   return 'FAILED';
+}
+
+// BVN/NIN must be confirmed by Smile ID itself — there is no manual-review
+// path. A provider rejection (e.g. malformed/unknown number → HTTP 400) is
+// treated the same as a failed match so the user gets a clean error.
+async function strictIdCheck(
+  input: Parameters<typeof smileIdService.verifyId>[0]
+): Promise<{ verified: boolean; matchedName?: string }> {
+  try {
+    const result = await smileIdService.verifyId(input);
+    return { verified: result.status === 'VERIFIED', matchedName: result.matchedName };
+  } catch (error) {
+    if (error instanceof SmileIdApiError) return { verified: false };
+    throw error;
+  }
 }
 
 // Face/liveness is only required for the individual actually opening the
@@ -130,15 +145,15 @@ export class KycService {
       return { success: true, message: 'BVN already verified', bvnStatus: merchant.bvnStatus, cached: true };
     }
 
-    let matchStatus: SmileIdMatchStatus;
+    let verified: boolean;
     let matchedName: string | undefined;
 
     if (env.KYC_VERIFICATION_MODE === 'static') {
       console.log(`🪪 [DEV] Skipping live Smile ID BVN verification for ${data.bvn} (KYC_VERIFICATION_MODE=static)`);
-      matchStatus = 'VERIFIED';
+      verified = true;
     } else {
       const [firstName, ...rest] = data.ownerName.trim().split(/\s+/);
-      const result = await smileIdService.verifyId({
+      const result = await strictIdCheck({
         idNumber: data.bvn,
         idType: 'BVN',
         firstName: firstName ?? data.ownerName,
@@ -148,21 +163,21 @@ export class KycService {
         userId,
         jobId: `bvn-${merchant.id}-${Date.now()}`,
       });
-      matchStatus = result.status;
+      verified = result.verified;
       matchedName = result.matchedName;
     }
 
     // Fuzzy name check on top of the provider's own verdict — a provider
     // "verified" result still gets rejected if the submitted name is wildly
     // different from what it matched against.
-    if (matchStatus === 'VERIFIED' && matchedName && !namesLooselyMatch(data.ownerName, matchedName)) {
-      matchStatus = 'MANUAL_REVIEW';
+    if (verified && matchedName && !namesLooselyMatch(data.ownerName, matchedName)) {
+      verified = false;
     }
 
-    if (matchStatus === 'FAILED') {
+    if (!verified) {
       const attemptsNow = merchant.bvnAttempts + 1;
       await prisma.merchant.update({ where: { id: merchant.id }, data: { bvnAttempts: attemptsNow } });
-      await this.audit(merchant.id, 'BVN', 'FAIL', matchStatus);
+      await this.audit(merchant.id, 'BVN', 'FAIL', 'FAILED');
 
       if (attemptsNow >= MAX_ATTEMPTS) {
         await this.audit(merchant.id, 'BVN', 'SOFT_BLOCK');
@@ -173,15 +188,32 @@ export class KycService {
       }
 
       throw new BadRequestError(
-        `BVN verification failed (${MAX_ATTEMPTS - attemptsNow} attempt(s) remaining)`,
+        `BVN could not be verified. Check the BVN, name and date of birth (${MAX_ATTEMPTS - attemptsNow} attempt(s) remaining)`,
         'BVN_MISMATCH'
       );
     }
 
-    const bvnStatus = toCheckStatus(matchStatus);
+    const bvnStatus: CheckStatus = 'VERIFIED';
     // Business type is already known (Step 1), so decide right now whether
     // Face is even needed — skip it immediately for CAC-registered types.
     const skipFace = bvnStatus === 'VERIFIED' && !faceRequired(merchant.businessType);
+
+    const businessTypeChanged = merchant.businessType !== data.businessType;
+    const cacGateUpdate = data.businessType === 'SOLE_PROPRIETORSHIP'
+      ? {
+          cacStatus: 'VERIFIED' as CheckStatus,
+          cacNumber: null,
+          sectorLicenseNumber: null,
+          cacVerifiedStatus: null,
+        }
+      : businessTypeChanged
+        ? {
+            cacStatus: 'PENDING' as CheckStatus,
+            cacNumber: null,
+            sectorLicenseNumber: null,
+            cacVerifiedStatus: null,
+          }
+        : {};
 
     await prisma.merchant.update({
       where: { id: merchant.id },
@@ -195,7 +227,7 @@ export class KycService {
       },
     });
 
-    await this.audit(merchant.id, 'BVN', bvnStatus === 'VERIFIED' ? 'PASS' : 'ATTEMPT', bvnStatus);
+    await this.audit(merchant.id, 'BVN', 'PASS', bvnStatus);
 
     if (skipFace) {
       await this.audit(merchant.id, 'FACE', 'PASS', 'SKIPPED_NOT_REQUIRED_FOR_BUSINESS_TYPE');
@@ -203,7 +235,7 @@ export class KycService {
 
     return {
       success: true,
-      message: bvnStatus === 'VERIFIED' ? 'BVN verified successfully' : 'BVN submitted for manual review',
+      message: 'BVN verified successfully',
       bvnStatus,
     };
   }
@@ -358,17 +390,17 @@ export class KycService {
       throw new BadRequestError('NIN already linked to another merchant account', 'NIN_ALREADY_LINKED');
     }
 
-    let matchStatus: SmileIdMatchStatus;
+    let verified: boolean;
 
     if (env.KYC_VERIFICATION_MODE === 'static') {
       console.log(`🪪 [DEV] Skipping live Smile ID NIN verification for ${data.nin} (KYC_VERIFICATION_MODE=static)`);
-      matchStatus = 'VERIFIED';
+      verified = true;
     } else {
       // Cross-check against the BVN-verified name/DOB (source of truth from
       // Step 1 onward), not any raw user-typed value at this step.
       const name = merchant.verifiedName ?? merchant.ownerName;
       const [firstName, ...rest] = name.trim().split(/\s+/);
-      const result = await smileIdService.verifyId({
+      const result = await strictIdCheck({
         idNumber: data.nin,
         idType: 'NIN',
         firstName: firstName ?? name,
@@ -378,13 +410,13 @@ export class KycService {
         userId,
         jobId: `nin-${merchant.id}-${Date.now()}`,
       });
-      matchStatus = result.status;
+      verified = result.verified;
     }
 
-    if (matchStatus === 'FAILED') {
+    if (!verified) {
       const attemptsNow = merchant.ninAttempts + 1;
       await prisma.merchant.update({ where: { id: merchant.id }, data: { ninAttempts: attemptsNow } });
-      await this.audit(merchant.id, 'NIN', 'FAIL', matchStatus);
+      await this.audit(merchant.id, 'NIN', 'FAIL', 'FAILED');
 
       if (attemptsNow >= MAX_ATTEMPTS) {
         await this.audit(merchant.id, 'NIN', 'SOFT_BLOCK');
@@ -395,12 +427,12 @@ export class KycService {
       }
 
       throw new BadRequestError(
-        `NIN verification failed (${MAX_ATTEMPTS - attemptsNow} attempt(s) remaining)`,
+        `NIN could not be verified. Check the NIN matches your BVN details (${MAX_ATTEMPTS - attemptsNow} attempt(s) remaining)`,
         'NIN_MISMATCH'
       );
     }
 
-    const ninStatus = toCheckStatus(matchStatus);
+    const ninStatus: CheckStatus = 'VERIFIED';
 
     await prisma.merchant.update({
       where: { id: merchant.id },
@@ -408,15 +440,15 @@ export class KycService {
         nin: data.nin,
         ninStatus,
         // BVN + NIN both linked and verified — bump the merchant to Tier 2.
-        kycLevel: ninStatus === 'VERIFIED' && merchant.bvnStatus === 'VERIFIED' ? 'TIER_2' : undefined,
+        kycLevel: merchant.bvnStatus === 'VERIFIED' ? 'TIER_2' : undefined,
       },
     });
 
-    await this.audit(merchant.id, 'NIN', ninStatus === 'VERIFIED' ? 'PASS' : 'ATTEMPT', ninStatus);
+    await this.audit(merchant.id, 'NIN', 'PASS', ninStatus);
 
     return {
       success: true,
-      message: ninStatus === 'VERIFIED' ? 'NIN verified successfully' : 'NIN submitted for manual review',
+      message: 'NIN verified successfully',
       ninStatus,
     };
   }
@@ -451,6 +483,7 @@ export class KycService {
         expectedMonthlyVolume: data.expectedMonthlyVolume,
         socialHandles: (data.socialHandles ?? null) as Prisma.InputJsonValue,
         ...(faceMatchStatus ? { faceMatchStatus } : {}),
+        ...cacGateUpdate,
       },
     });
 
@@ -497,7 +530,7 @@ export class KycService {
     return { success: true, message: 'Address saved' };
   }
 
-  // ========== STEP 6: KYB (skipped entirely for INDIVIDUAL_TRADER) ==========
+  // ========== STEP 6: KYB (CAC is not required for individual/sole traders) ==========
   async submitKybStep(userId: string, data: KycKybInput) {
     const merchant = await this.getMerchant(userId);
 
@@ -509,6 +542,33 @@ export class KycService {
       await prisma.merchant.update({ where: { id: merchant.id }, data: { cacStatus: 'VERIFIED' } });
       await this.audit(merchant.id, 'KYB', 'PASS', 'SKIPPED_INDIVIDUAL_TRADER');
       return { success: true, message: 'KYB not required for individual traders', cacStatus: 'VERIFIED' as CheckStatus };
+    }
+
+    // Sole proprietors do not provide CAC or sector-licence details in this
+    // onboarding flow. Keep SCUML validation below available for restricted
+    // categories, but complete the CAC gate without calling the CAC provider.
+    if (merchant.businessType === 'SOLE_PROPRIETORSHIP') {
+      if (requiresScuml(merchant.mccCategory ?? '') && !data.scumlNumber) {
+        throw new BadRequestError('SCUML number is required for this business category', 'SCUML_REQUIRED');
+      }
+
+      await prisma.merchant.update({
+        where: { id: merchant.id },
+        data: {
+          cacNumber: null,
+          tin: data.tin ?? null,
+          scumlNumber: data.scumlNumber ?? null,
+          sectorLicenseNumber: null,
+          cacStatus: 'VERIFIED',
+          cacVerifiedStatus: null,
+        },
+      });
+      await this.audit(merchant.id, 'KYB', 'PASS', 'SKIPPED_SOLE_PROPRIETORSHIP');
+      return {
+        success: true,
+        message: 'CAC and sector licence are not required for sole proprietorships',
+        cacStatus: 'VERIFIED' as CheckStatus,
+      };
     }
 
     if (!data.cacNumber) {
@@ -532,6 +592,51 @@ export class KycService {
       }
     }
 
+    // Every director's BVN and NIN must be confirmed by Smile ID before any of
+    // the KYB submission is saved — one unverifiable director rejects the step.
+    const newDirectors: NonNullable<KycKybInput['directors']> = [];
+    if (requiresDirectors && data.directors) {
+      for (const director of data.directors) {
+        const existingPerson = await prisma.merchantPerson.findFirst({
+          where: { merchantId: merchant.id, bvn: director.bvn },
+        });
+        if (existingPerson) continue; // already recorded in a previous submission
+
+        if (env.KYC_VERIFICATION_MODE !== 'static') {
+          const [firstName, ...rest] = director.fullName.trim().split(/\s+/);
+          const names = { firstName: firstName ?? director.fullName, lastName: rest.join(' ') || director.fullName };
+
+          const bvnResult = await strictIdCheck({
+            idNumber: director.bvn,
+            idType: 'BVN',
+            ...names,
+            dob: '',
+            phoneNumber: '',
+            userId,
+            jobId: `person-bvn-${merchant.id}-${Date.now()}-${director.bvn}`,
+          });
+          if (!bvnResult.verified) {
+            throw new BadRequestError(`BVN could not be verified for ${director.fullName}`, 'DIRECTOR_BVN_MISMATCH');
+          }
+
+          const ninResult = await strictIdCheck({
+            idNumber: director.nin,
+            idType: 'NIN',
+            ...names,
+            dob: '',
+            phoneNumber: '',
+            userId,
+            jobId: `person-nin-${merchant.id}-${Date.now()}-${director.nin}`,
+          });
+          if (!ninResult.verified) {
+            throw new BadRequestError(`NIN could not be verified for ${director.fullName}`, 'DIRECTOR_NIN_MISMATCH');
+          }
+        }
+
+        newDirectors.push(director);
+      }
+    }
+
     let cacStatus: CheckStatus;
     let registrationStatus: string | undefined;
 
@@ -540,20 +645,28 @@ export class KycService {
       cacStatus = 'VERIFIED';
       registrationStatus = 'Active';
     } else {
-      const result = await smileIdService.verifyBusiness({
-        registrationNumber: data.cacNumber,
-        businessType: toSmileIdBusinessType(merchant.businessType),
-        userId,
-        jobId: `cac-${merchant.id}-${Date.now()}`,
-      });
-      registrationStatus = result.registrationStatus;
-      const nameMatches = result.companyName ? namesLooselyMatch(merchant.businessName, result.companyName) : true;
-      cacStatus =
-        result.status === 'VERIFIED' && registrationStatus?.toLowerCase() === 'active' && nameMatches
-          ? 'VERIFIED'
-          : result.status === 'FAILED'
-            ? 'FAILED'
-            : 'MANUAL_REVIEW';
+      try {
+        const result = await smileIdService.verifyBusiness({
+          registrationNumber: data.cacNumber,
+          businessType: toSmileIdBusinessType(merchant.businessType),
+          userId,
+          jobId: `cac-${merchant.id}-${Date.now()}`,
+        });
+        registrationStatus = result.registrationStatus;
+        const nameMatches = result.companyName ? namesLooselyMatch(merchant.businessName, result.companyName) : true;
+        cacStatus =
+          result.status === 'VERIFIED' && registrationStatus?.toLowerCase() === 'active' && nameMatches
+            ? 'VERIFIED'
+            : result.status === 'FAILED'
+              ? 'FAILED'
+              : 'MANUAL_REVIEW';
+      } catch (error) {
+        // Smile ID rejects some lookups outright (e.g. sandbox only supports
+        // 'co' test data, unsupported number formats) — park the CAC for admin
+        // review instead of failing the whole step with a 500.
+        if (!(error instanceof SmileIdApiError)) throw error;
+        cacStatus = 'MANUAL_REVIEW';
+      }
     }
 
     await prisma.merchant.update({
@@ -568,57 +681,19 @@ export class KycService {
       },
     });
 
-    if (requiresDirectors && data.directors) {
-      for (const director of data.directors) {
-        const existingPerson = await prisma.merchantPerson.findFirst({
-          where: { merchantId: merchant.id, bvn: director.bvn },
-        });
-        if (existingPerson) continue; // already recorded in a previous submission
-
-        let personBvnStatus: CheckStatus = 'VERIFIED';
-        let personNinStatus: CheckStatus = 'VERIFIED';
-
-        if (env.KYC_VERIFICATION_MODE !== 'static') {
-          const [firstName, ...rest] = director.fullName.trim().split(/\s+/);
-
-          const bvnResult = await smileIdService.verifyId({
-            idNumber: director.bvn,
-            idType: 'BVN',
-            firstName: firstName ?? director.fullName,
-            lastName: rest.join(' ') || director.fullName,
-            dob: '',
-            phoneNumber: '',
-            userId,
-            jobId: `person-bvn-${merchant.id}-${Date.now()}-${director.bvn}`,
-          });
-          personBvnStatus = toCheckStatus(bvnResult.status);
-
-          const ninResult = await smileIdService.verifyId({
-            idNumber: director.nin,
-            idType: 'NIN',
-            firstName: firstName ?? director.fullName,
-            lastName: rest.join(' ') || director.fullName,
-            dob: '',
-            phoneNumber: '',
-            userId,
-            jobId: `person-nin-${merchant.id}-${Date.now()}-${director.nin}`,
-          });
-          personNinStatus = toCheckStatus(ninResult.status);
-        }
-
-        await prisma.merchantPerson.create({
-          data: {
-            merchantId: merchant.id,
-            personRole: director.personRole,
-            fullName: director.fullName,
-            bvn: director.bvn,
-            nin: director.nin,
-            ownershipPercent: director.ownershipPercent,
-            bvnStatus: personBvnStatus,
-            ninStatus: personNinStatus,
-          },
-        });
-      }
+    for (const director of newDirectors) {
+      await prisma.merchantPerson.create({
+        data: {
+          merchantId: merchant.id,
+          personRole: director.personRole,
+          fullName: director.fullName,
+          bvn: director.bvn,
+          nin: director.nin,
+          ownershipPercent: director.ownershipPercent,
+          bvnStatus: 'VERIFIED',
+          ninStatus: 'VERIFIED',
+        },
+      });
     }
 
     await this.audit(merchant.id, 'KYB', cacStatus === 'VERIFIED' ? 'PASS' : 'ATTEMPT', cacStatus);
