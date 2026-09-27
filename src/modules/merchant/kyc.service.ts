@@ -198,23 +198,6 @@ export class KycService {
     // Face is even needed — skip it immediately for CAC-registered types.
     const skipFace = bvnStatus === 'VERIFIED' && !faceRequired(merchant.businessType);
 
-    const businessTypeChanged = merchant.businessType !== data.businessType;
-    const cacGateUpdate = data.businessType === 'SOLE_PROPRIETORSHIP'
-      ? {
-          cacStatus: 'VERIFIED' as CheckStatus,
-          cacNumber: null,
-          sectorLicenseNumber: null,
-          cacVerifiedStatus: null,
-        }
-      : businessTypeChanged
-        ? {
-            cacStatus: 'PENDING' as CheckStatus,
-            cacNumber: null,
-            sectorLicenseNumber: null,
-            cacVerifiedStatus: null,
-          }
-        : {};
-
     await prisma.merchant.update({
       where: { id: merchant.id },
       data: {
@@ -472,6 +455,23 @@ export class KycService {
       faceMatchStatus = faceRequired(data.businessType) ? 'PENDING' : 'VERIFIED';
     }
 
+    const businessTypeChanged = merchant.businessType !== data.businessType;
+    const cacGateUpdate = data.businessType === 'SOLE_PROPRIETORSHIP'
+      ? {
+          cacStatus: 'VERIFIED' as CheckStatus,
+          cacNumber: null,
+          sectorLicenseNumber: null,
+          cacVerifiedStatus: null,
+        }
+      : businessTypeChanged
+        ? {
+            cacStatus: 'PENDING' as CheckStatus,
+            cacNumber: null,
+            sectorLicenseNumber: null,
+            cacVerifiedStatus: null,
+          }
+        : {};
+
     await prisma.merchant.update({
       where: { id: merchant.id },
       data: {
@@ -544,20 +544,15 @@ export class KycService {
       return { success: true, message: 'KYB not required for individual traders', cacStatus: 'VERIFIED' as CheckStatus };
     }
 
-    // Sole proprietors do not provide CAC or sector-licence details in this
-    // onboarding flow. Keep SCUML validation below available for restricted
-    // categories, but complete the CAC gate without calling the CAC provider.
+    // Sole proprietors do not use the KYB step in this onboarding flow.
+    // Complete the gate without requesting CAC, sector licence or SCUML data.
     if (merchant.businessType === 'SOLE_PROPRIETORSHIP') {
-      if (requiresScuml(merchant.mccCategory ?? '') && !data.scumlNumber) {
-        throw new BadRequestError('SCUML number is required for this business category', 'SCUML_REQUIRED');
-      }
-
       await prisma.merchant.update({
         where: { id: merchant.id },
         data: {
           cacNumber: null,
-          tin: data.tin ?? null,
-          scumlNumber: data.scumlNumber ?? null,
+          tin: null,
+          scumlNumber: null,
           sectorLicenseNumber: null,
           cacStatus: 'VERIFIED',
           cacVerifiedStatus: null,
