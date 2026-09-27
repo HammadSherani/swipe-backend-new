@@ -17,11 +17,13 @@ export type SmileIdMatchStatus = 'VERIFIED' | 'FAILED' | 'MANUAL_REVIEW';
 
 export interface SmileIdIdCheckInput {
   idNumber: string;
-  idType: 'BVN' | 'NIN';
+  idType: 'BVN' | 'NIN' | 'TIN';
   firstName: string;
   lastName: string;
   dob: string; // yyyy-mm-dd
   phoneNumber: string;
+  /** Optional company name for business-issued identifiers such as TIN. */
+  businessName?: string;
   userId: string;
   jobId: string;
 }
@@ -159,8 +161,11 @@ export class SmileIdService {
           // Smile ID deprecated the plain 'NIN' id_type; NIN lookups must use 'NIN_V2'.
           id_type: input.idType === 'NIN' ? 'NIN_V2' : input.idType,
           id_number: input.idNumber,
-          dob: input.dob,
-          phone_number: input.phoneNumber,
+          ...(input.dob ? { dob: input.dob } : {}),
+          ...(input.phoneNumber ? { phone_number: input.phoneNumber } : {}),
+          ...(input.businessName
+            ? { business_name: input.businessName, company: input.businessName }
+            : {}),
         }
       );
 

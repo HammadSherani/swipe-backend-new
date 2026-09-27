@@ -50,14 +50,12 @@ const envSchema = z.object({
   MONNIFY_SECRET_KEY: z.string(),
   MONNIFY_CONTRACT_CODE: z.string(),
 
-  // Smile ID — identity verification (BVN/NIN/Face) for merchant KYC onboarding.
+  // Smile ID — identity and business verification (BVN/NIN/TIN/CAC/Face).
   SMILE_ID_PARTNER_ID: z.string().default(''),
   SMILE_ID_API_KEY: z.string().default(''),
   SMILE_ID_CALLBACK_URL: z.string().default('http://localhost:3010/merchant/kyc/webhook'),
   SMILE_ID_SERVER: z.enum(['0', '1']).default('0'), // '0' sandbox, '1' production
 
-  // No real Smile ID credentials wired up yet, so KYC checks stay mocked
-  // ('static') until live sandbox/production credentials are available.
   KYC_VERIFICATION_MODE: z.enum(['static', 'live']).default('static'),
 
   // Monnify's BVN-account match exists only on a Live Monnify account (not their

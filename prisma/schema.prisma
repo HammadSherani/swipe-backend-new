@@ -97,6 +97,7 @@ model Merchant {
   // 🏛️ Step 6: KYB (skipped entirely for INDIVIDUAL_TRADER)
   cacStatus              CheckStatus @default(PENDING)
   cacVerifiedStatus      String?     // raw "Active"/"Inactive" from the CAC lookup
+  tinStatus              CheckStatus @default(PENDING)
   sectorLicenseNumber    String?     // manual/unverified (e.g. PCN, NAFDAC) — admin-reviewed
   scumlNumber            String?     // required if mccCategory falls under DNFBP categories
 

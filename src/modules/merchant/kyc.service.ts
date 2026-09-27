@@ -459,14 +459,18 @@ export class KycService {
     const cacGateUpdate = data.businessType === 'SOLE_PROPRIETORSHIP'
       ? {
           cacStatus: 'VERIFIED' as CheckStatus,
+          tinStatus: 'VERIFIED' as CheckStatus,
           cacNumber: null,
+          tin: null,
           sectorLicenseNumber: null,
           cacVerifiedStatus: null,
         }
       : businessTypeChanged
         ? {
             cacStatus: 'PENDING' as CheckStatus,
+            tinStatus: 'PENDING' as CheckStatus,
             cacNumber: null,
+            tin: null,
             sectorLicenseNumber: null,
             cacVerifiedStatus: null,
           }
@@ -530,7 +534,7 @@ export class KycService {
     return { success: true, message: 'Address saved' };
   }
 
-  // ========== STEP 6: KYB (CAC is not required for individual/sole traders) ==========
+  // ========== STEP 6: KYB (CAC/TIN are verified through Smile ID) ==========
   async submitKybStep(userId: string, data: KycKybInput) {
     const merchant = await this.getMerchant(userId);
 
@@ -539,9 +543,17 @@ export class KycService {
     }
 
     if (merchant.businessType === 'INDIVIDUAL_TRADER') {
-      await prisma.merchant.update({ where: { id: merchant.id }, data: { cacStatus: 'VERIFIED' } });
+      await prisma.merchant.update({
+        where: { id: merchant.id },
+        data: { cacStatus: 'VERIFIED', tinStatus: 'VERIFIED' },
+      });
       await this.audit(merchant.id, 'KYB', 'PASS', 'SKIPPED_INDIVIDUAL_TRADER');
-      return { success: true, message: 'KYB not required for individual traders', cacStatus: 'VERIFIED' as CheckStatus };
+      return {
+        success: true,
+        message: 'KYB not required for individual traders',
+        cacStatus: 'VERIFIED' as CheckStatus,
+        tinStatus: 'VERIFIED' as CheckStatus,
+      };
     }
 
     // Sole proprietors do not use the KYB step in this onboarding flow.
@@ -555,6 +567,7 @@ export class KycService {
           scumlNumber: null,
           sectorLicenseNumber: null,
           cacStatus: 'VERIFIED',
+          tinStatus: 'VERIFIED',
           cacVerifiedStatus: null,
         },
       });
@@ -563,6 +576,7 @@ export class KycService {
         success: true,
         message: 'CAC and sector licence are not required for sole proprietorships',
         cacStatus: 'VERIFIED' as CheckStatus,
+        tinStatus: 'VERIFIED' as CheckStatus,
       };
     }
 
@@ -571,11 +585,15 @@ export class KycService {
     }
 
     const requiresDirectors = merchant.businessType === 'PARTNERSHIP' || merchant.businessType === 'LIMITED_LIABILITY';
+    const requiresTin = requiresDirectors || merchant.businessType === 'INCORPORATED_TRUSTEES';
 
-    if (requiresDirectors) {
+    if (requiresTin) {
       if (!data.tin) {
         throw new BadRequestError('TIN is required for this business type', 'TIN_REQUIRED');
       }
+    }
+
+    if (requiresDirectors) {
       if (requiresScuml(merchant.mccCategory ?? '') && !data.scumlNumber) {
         throw new BadRequestError('SCUML number is required for this business category', 'SCUML_REQUIRED');
       }
@@ -584,6 +602,24 @@ export class KycService {
           'At least one director/shareholder is required for this business type',
           'DIRECTORS_REQUIRED'
         );
+      }
+    }
+
+    if (data.cacNumber) {
+      const existingCac = await prisma.merchant.findFirst({
+        where: { cacNumber: data.cacNumber, NOT: { userId } },
+      });
+      if (existingCac) {
+        throw new BadRequestError('CAC number already linked to another merchant account', 'CAC_ALREADY_LINKED');
+      }
+    }
+
+    if (data.tin) {
+      const existingTin = await prisma.merchant.findFirst({
+        where: { tin: data.tin, NOT: { userId } },
+      });
+      if (existingTin) {
+        throw new BadRequestError('TIN already linked to another merchant account', 'TIN_ALREADY_LINKED');
       }
     }
 
@@ -634,6 +670,7 @@ export class KycService {
 
     let cacStatus: CheckStatus;
     let registrationStatus: string | undefined;
+    let tinStatus: CheckStatus = data.tin ? 'PENDING' : 'VERIFIED';
 
     if (env.KYC_VERIFICATION_MODE === 'static') {
       console.log(`🪪 [DEV] Skipping live Smile ID CAC verification for ${data.cacNumber} (KYC_VERIFICATION_MODE=static)`);
@@ -664,6 +701,36 @@ export class KycService {
       }
     }
 
+    if (data.tin) {
+      if (env.KYC_VERIFICATION_MODE === 'static') {
+        console.log(`🪪 [DEV] Skipping live Smile ID TIN verification for ${data.tin} (KYC_VERIFICATION_MODE=static)`);
+        tinStatus = 'VERIFIED';
+      } else {
+        try {
+          const name = merchant.ownerName || merchant.businessName;
+          const [firstName, ...rest] = name.trim().split(/\s+/);
+          const tinResult = await smileIdService.verifyId({
+            idNumber: data.tin,
+            idType: 'TIN',
+            firstName: firstName ?? name,
+            lastName: rest.join(' ') || name,
+            dob: merchant.ownerDob ? merchant.ownerDob.toISOString().slice(0, 10) : '',
+            phoneNumber: merchant.mobile,
+            businessName: merchant.businessName,
+            userId,
+            jobId: `tin-${merchant.id}-${Date.now()}`,
+          });
+          tinStatus = toCheckStatus(tinResult.status);
+        } catch (error) {
+          // A provider rejection or an unavailable TIN product must not turn
+          // onboarding into a 500. Keep the submitted TIN and let an admin
+          // review the result, just like CAC.
+          if (!(error instanceof SmileIdApiError)) throw error;
+          tinStatus = 'MANUAL_REVIEW';
+        }
+      }
+    }
+
     await prisma.merchant.update({
       where: { id: merchant.id },
       data: {
@@ -673,6 +740,7 @@ export class KycService {
         sectorLicenseNumber: data.sectorLicenseNumber ?? null,
         cacStatus,
         cacVerifiedStatus: registrationStatus ?? null,
+        tinStatus,
       },
     });
 
@@ -691,12 +759,20 @@ export class KycService {
       });
     }
 
-    await this.audit(merchant.id, 'KYB', cacStatus === 'VERIFIED' ? 'PASS' : 'ATTEMPT', cacStatus);
+    await this.audit(
+      merchant.id,
+      'KYB',
+      cacStatus === 'VERIFIED' && tinStatus === 'VERIFIED' ? 'PASS' : 'ATTEMPT',
+      `CAC:${cacStatus};TIN:${tinStatus}`,
+    );
 
     return {
       success: true,
-      message: cacStatus === 'VERIFIED' ? 'Business verified successfully' : 'Business submitted for manual review',
+      message: cacStatus === 'VERIFIED' && tinStatus === 'VERIFIED'
+        ? 'Business verified successfully'
+        : 'Business submitted for manual review',
       cacStatus,
+      tinStatus,
     };
   }
 
@@ -704,7 +780,7 @@ export class KycService {
   async submitBankStep(userId: string, data: KycBankInput) {
     const merchant = await this.getMerchant(userId);
 
-    if (merchant.cacStatus === 'PENDING') {
+    if (merchant.cacStatus === 'PENDING' || merchant.tinStatus === 'PENDING') {
       throw new BadRequestError('Complete KYB step first', 'STEP_LOCKED');
     }
 
@@ -791,7 +867,7 @@ export class KycService {
       (merchant.faceMatchStatus !== 'VERIFIED' && merchant.faceMatchStatus !== 'MANUAL_REVIEW') ? 'FACE' :
       merchant.ninStatus !== 'VERIFIED' ? 'NIN' :
       !merchant.addressLga ? 'ADDRESS' :
-      merchant.cacStatus === 'PENDING' ? 'KYB' :
+      merchant.cacStatus === 'PENDING' || merchant.tinStatus === 'PENDING' ? 'KYB' :
       merchant.nubanStatus === 'PENDING' ? 'BANK' :
       (merchant.status === 'PENDING' || merchant.status === 'IN_PROGRESS') ? 'DECISION' :
       'DONE';
@@ -805,6 +881,7 @@ export class KycService {
       ninStatus: merchant.ninStatus,
       ninAttemptsRemaining: Math.max(0, MAX_ATTEMPTS - merchant.ninAttempts),
       cacStatus: merchant.cacStatus,
+      tinStatus: merchant.tinStatus,
       nubanStatus: merchant.nubanStatus,
       merchantStatus: merchant.status,
       nextStep,
