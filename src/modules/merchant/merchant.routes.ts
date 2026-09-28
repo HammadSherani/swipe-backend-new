@@ -49,8 +49,9 @@ export async function merchantRoutes(fastify: FastifyInstance) {
 
   // Protected — JWT required
 
-  // ── KYC onboarding: Business → BVN → Face (skipped for CAC-registered
-  // business types) → NIN → Address → KYB → Bank → Decision ──
+  // ── KYC onboarding: Business → BVN → Face (required for individual
+  // traders and sole proprietorships; skipped for registered entities) →
+  // NIN → Address → KYB → Bank → Decision ──
   app.post('/kyc/business', {
     schema: { tags: ['Merchant KYC'], description: 'Step 1: business info — decides whether Face verification is required', body: kycBusinessSchema },
     preHandler: fastify.authenticate,
@@ -64,7 +65,7 @@ export async function merchantRoutes(fastify: FastifyInstance) {
   });
 
   app.post('/kyc/face', {
-    schema: { tags: ['Merchant KYC'], description: 'Step 3: face/liveness verification — required only for INDIVIDUAL_TRADER, auto-skipped otherwise', body: kycFaceSchema },
+    schema: { tags: ['Merchant KYC'], description: 'Step 3: face/liveness verification — required for INDIVIDUAL_TRADER and SOLE_PROPRIETORSHIP, auto-skipped for registered entities', body: kycFaceSchema },
     preHandler: fastify.authenticate,
     handler: kycFaceHandler,
   });

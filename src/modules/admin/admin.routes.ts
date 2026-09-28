@@ -1,6 +1,13 @@
 import { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { listPendingReviewHandler, decideHandler, getDashboardStatsHandler } from './admin.controller.js';
+import {
+  listPendingReviewHandler,
+  listMerchantsHandler,
+  decideHandler,
+  blockMerchantHandler,
+  getDashboardStatsHandler,
+  getMerchantDetailHandler,
+} from './admin.controller.js';
 import { reviewDecisionSchema, merchantIdParamsSchema } from './admin.schema.js';
 
 export async function adminRoutes(fastify: FastifyInstance) {
@@ -18,6 +25,22 @@ export async function adminRoutes(fastify: FastifyInstance) {
     handler: listPendingReviewHandler,
   });
 
+  app.get('/merchants', {
+    schema: { tags: ['Admin'], description: 'List all merchants' },
+    preHandler: [fastify.authenticate, fastify.requireAdmin],
+    handler: listMerchantsHandler,
+  });
+
+  app.get('/merchants/:id', {
+    schema: {
+      tags: ['Admin'],
+      description: 'Get full merchant detail for the admin review page',
+      params: merchantIdParamsSchema,
+    },
+    preHandler: [fastify.authenticate, fastify.requireAdmin],
+    handler: getMerchantDetailHandler,
+  });
+
   app.post('/merchants/:id/decide', {
     schema: {
       tags: ['Admin'],
@@ -27,5 +50,15 @@ export async function adminRoutes(fastify: FastifyInstance) {
     },
     preHandler: [fastify.authenticate, fastify.requireAdmin],
     handler: decideHandler,
+  });
+
+  app.post('/merchants/:id/block', {
+    schema: {
+      tags: ['Admin'],
+      description: 'Suspend an active merchant',
+      params: merchantIdParamsSchema,
+    },
+    preHandler: [fastify.authenticate, fastify.requireAdmin],
+    handler: blockMerchantHandler,
   });
 }

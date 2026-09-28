@@ -47,15 +47,13 @@ async function strictIdCheck(
   }
 }
 
-// Face/liveness is only required for the individual actually opening the
-// account (B2C-style INDIVIDUAL_TRADER). For every CAC-registered business
-// type, the person completing onboarding is often a compliance/ops agent —
-// not the BVN owner — so face-matching them would fail even though the
-// onboarding is legitimate. Those business types already get independently
-// verified via CAC/TIN/certificate of incorporation at the KYB step, which
-// is a strong enough identity layer for the business itself.
+// Face/liveness is required for the natural person actually opening the
+// account, including sole proprietorships where the business owner is the
+// same person using BVN-based identity. For registered corporate entities,
+// the person completing onboarding is often a compliance/ops agent rather
+// than the BVN holder, so face matching is intentionally skipped there.
 function faceRequired(businessType: string): boolean {
-  return businessType === 'INDIVIDUAL_TRADER';
+  return businessType === 'INDIVIDUAL_TRADER' || businessType === 'SOLE_PROPRIETORSHIP';
 }
 
 // Maps our BusinessType enum to Smile ID's Nigeria Business Registration

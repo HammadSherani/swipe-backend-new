@@ -30,6 +30,61 @@ export class AdminService {
     });
   }
 
+  async listMerchants() {
+    return prisma.merchant.findMany({
+      include: { persons: true },
+      orderBy: { updatedAt: 'desc' },
+    });
+  }
+
+  async getMerchantDetail(merchantId: string) {
+    const merchant = await prisma.merchant.findUnique({
+      where: { id: merchantId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            mobile: true,
+            role: true,
+            kycStatus: true,
+            isVerified: true,
+            isActive: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        },
+        persons: {
+          orderBy: { createdAt: 'asc' },
+        },
+        kycAuditLogs: {
+          orderBy: { createdAt: 'desc' },
+          take: 100,
+        },
+        qrCodes: {
+          orderBy: { createdAt: 'desc' },
+          take: 20,
+        },
+        paymentLinks: {
+          orderBy: { createdAt: 'desc' },
+          take: 20,
+        },
+        virtualAccounts: {
+          orderBy: { createdAt: 'desc' },
+          take: 20,
+        },
+      },
+    });
+
+    if (!merchant) {
+      throw new NotFoundError('Merchant not found');
+    }
+
+    return merchant;
+  }
+
   /**
    * Final decision by a single admin — approve activates the merchant and
    * issues its QR; reject records the reason.
@@ -95,6 +150,34 @@ export class AdminService {
     const qr = await new QrService().generateStatic({ merchantId: activeMerchant.id });
 
     return { success: true, message: 'Merchant approved and activated', status: activeMerchant.status, qr };
+  }
+
+  async blockMerchant(merchantId: string, adminUserId: string) {
+    const merchant = await prisma.merchant.findUnique({ where: { id: merchantId } });
+    if (!merchant) {
+      throw new NotFoundError('Merchant not found');
+    }
+
+    if (merchant.status !== 'ACTIVE' || !merchant.isActive) {
+      throw new BadRequestError('Merchant is not currently active', 'MERCHANT_NOT_ACTIVE');
+    }
+
+    const suspended = await prisma.merchant.update({
+      where: { id: merchantId },
+      data: { status: 'SUSPENDED', isActive: false },
+    });
+
+    await prisma.kycAuditLog.create({
+      data: {
+        merchantId,
+        step: 'ADMIN_DECISION',
+        action: 'SOFT_BLOCK',
+        result: 'SUSPENDED',
+        metadata: { adminUserId, decision: 'BLOCK' } as Prisma.InputJsonValue,
+      },
+    });
+
+    return { success: true, message: 'Merchant blocked', status: suspended.status };
   }
 }
 
