@@ -57,6 +57,9 @@ const envSchema = z.object({
   SMILE_ID_SERVER: z.enum(['0', '1']).default('0'), // '0' sandbox, '1' production
 
   KYC_VERIFICATION_MODE: z.enum(['static', 'live']).default('static'),
+  // Allows the all-zero director IDs used by local/staging test fixtures to
+  // reach the CAC call. This never bypasses checks in production.
+  KYC_ALLOW_ZERO_TEST_IDS: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
 
   // Monnify's BVN-account match exists only on a Live Monnify account (not their
   // sandbox) and costs per call, so it's a separate switch from the Smile ID

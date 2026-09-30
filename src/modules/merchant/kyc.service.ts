@@ -631,7 +631,10 @@ export class KycService {
         });
         if (existingPerson) continue; // already recorded in a previous submission
 
-        if (env.KYC_VERIFICATION_MODE !== 'static') {
+        const isZeroTestDirector = director.bvn === '00000000000' && director.nin === '00000000000';
+        const allowZeroTestDirector = env.SMILE_ID_SERVER === '0' && env.KYC_ALLOW_ZERO_TEST_IDS;
+
+        if (env.KYC_VERIFICATION_MODE !== 'static' && !(allowZeroTestDirector && isZeroTestDirector)) {
           const [firstName, ...rest] = director.fullName.trim().split(/\s+/);
           const names = { firstName: firstName ?? director.fullName, lastName: rest.join(' ') || director.fullName };
 
@@ -660,6 +663,8 @@ export class KycService {
           if (!ninResult.verified) {
             throw new BadRequestError(`NIN could not be verified for ${director.fullName}`, 'DIRECTOR_NIN_MISMATCH');
           }
+        } else if (allowZeroTestDirector && isZeroTestDirector) {
+          console.warn('⚠️ [TEST] Skipping Smile ID director BVN/NIN checks for all-zero test IDs; CAC/TIN checks remain enabled.');
         }
 
         newDirectors.push(director);
@@ -684,6 +689,12 @@ export class KycService {
         });
         registrationStatus = result.registrationStatus;
         const nameMatches = result.companyName ? namesLooselyMatch(merchant.businessName, result.companyName) : true;
+        console.log('🪪 Smile ID CAC result:', {
+          providerStatus: result.status,
+          registrationStatus,
+          companyNameReturned: Boolean(result.companyName),
+          nameMatches,
+        });
         cacStatus =
           result.status === 'VERIFIED' && registrationStatus?.toLowerCase() === 'active' && nameMatches
             ? 'VERIFIED'
