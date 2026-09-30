@@ -7,6 +7,7 @@ import {
   blockMerchantHandler,
   getDashboardStatsHandler,
   getMerchantDetailHandler,
+  deleteMerchantHandler,
 } from './admin.controller.js';
 import { reviewDecisionSchema, merchantIdParamsSchema } from './admin.schema.js';
 
@@ -60,5 +61,15 @@ export async function adminRoutes(fastify: FastifyInstance) {
     },
     preHandler: [fastify.authenticate, fastify.requireAdmin],
     handler: blockMerchantHandler,
+  });
+
+  app.delete('/merchants/:id', {
+    schema: {
+      tags: ['Admin'],
+      description: 'Permanently delete a merchant, its account, and related records',
+      params: merchantIdParamsSchema,
+    },
+    preHandler: [fastify.authenticate, fastify.requireAdmin],
+    handler: deleteMerchantHandler,
   });
 }

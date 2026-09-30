@@ -51,3 +51,11 @@ export async function blockMerchantHandler(
   const result = await adminService.blockMerchant(request.params.id, adminUserId);
   return reply.status(200).send({ success: true, data: result });
 }
+
+export async function deleteMerchantHandler(
+  request: FastifyRequest<{ Params: { id: string } }>,
+  reply: FastifyReply
+) {
+  const result = await adminService.deleteMerchant(request.params.id);
+  return reply.status(200).send({ success: true, data: result });
+}

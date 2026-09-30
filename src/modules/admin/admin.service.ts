@@ -179,6 +179,26 @@ export class AdminService {
 
     return { success: true, message: 'Merchant blocked', status: suspended.status };
   }
+
+  async deleteMerchant(merchantId: string) {
+    const merchant = await prisma.merchant.findUnique({
+      where: { id: merchantId },
+      select: { id: true, userId: true },
+    });
+
+    if (!merchant) {
+      throw new NotFoundError('Merchant not found');
+    }
+
+    await prisma.$transaction(async (tx) => {
+      // Merchant-owned records use onDelete: Cascade. Delete the merchant
+      // first, then its account, so no orphaned login remains behind.
+      await tx.merchant.delete({ where: { id: merchant.id } });
+      await tx.user.delete({ where: { id: merchant.userId } });
+    });
+
+    return { success: true, message: 'Merchant deleted', merchantId: merchant.id };
+  }
 }
 
 export const adminService = new AdminService();
