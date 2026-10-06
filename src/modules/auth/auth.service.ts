@@ -51,10 +51,11 @@ export class AuthService {
       },
     });
 
-    const emailOtp = generateOtp();
+    const otp = generateOtp();
+    const emailOtp = otp;
     // Twilio Verify generates and stores the mobile code when live mode is on.
     // Keep the legacy column populated because it is required by the schema.
-    const mobileOtp = env.OTP_MODE === 'live' ? 'TWILIO_VERIFY' : generateOtp();
+    const mobileOtp = env.OTP_MODE === 'live' ? 'TWILIO_VERIFY' : otp;
 
     const hashedPassword = await bcrypt.hash(data.password, 12);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
@@ -95,8 +96,8 @@ export class AuthService {
       });
     }
 
-    // ✅ Send Email OTP
-    // await sendOtpEmail(data.email, emailOtp, data.firstName);
+    // Send the generated OTP by email. In live mode, Twilio sends the mobile code.
+    await sendOtpEmail(data.email, emailOtp, data.firstName);
     console.log(`📧 Email OTP for ${data.email}: ${emailOtp}`);
 
     if (env.OTP_MODE === 'live') {
@@ -241,8 +242,9 @@ export class AuthService {
   // Generates new email + mobile OTPs for a pending registration, extends its
   // expiry, and sends them. Shared by resend-otp and login-with-unverified-account.
   private async issueFreshOtp(pending: { id: string; email: string; mobile: string; firstName: string }) {
-    const emailOtp = generateOtp();
-    const mobileOtp = env.OTP_MODE === 'live' ? 'TWILIO_VERIFY' : generateOtp();
+    const otp = generateOtp();
+    const emailOtp = otp;
+    const mobileOtp = env.OTP_MODE === 'live' ? 'TWILIO_VERIFY' : otp;
 
     await prisma.pendingRegistration.update({
       where: { id: pending.id },
